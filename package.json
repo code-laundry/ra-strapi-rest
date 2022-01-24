@@ -28,5 +28,8 @@
   },
   "peerDependencies": {
     "react-admin": "3.19.6"
+  },
+  "dependencies": {
+    "qs": "6.10.3"
   }
 }

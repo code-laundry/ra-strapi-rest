@@ -1,15 +1,16 @@
 import {
-  fetchUtils,
-  GET_LIST,
-  GET_ONE,
-  GET_MANY,
-  GET_MANY_REFERENCE,
   CREATE,
-  UPDATE,
-  UPDATE_MANY,
   DELETE,
   DELETE_MANY,
+  fetchUtils,
+  GET_LIST,
+  GET_MANY,
+  GET_MANY_REFERENCE,
+  GET_ONE,
+  UPDATE,
+  UPDATE_MANY,
 } from 'react-admin';
+import qs from 'qs';
 
 /**
  * Maps react-admin queries to a simple REST API
@@ -44,12 +45,12 @@ export default (apiUrl, httpClient = fetchUtils.fetchJson, uploadFields = []) =>
         options.method = 'PUT';
         // Omit created_at/updated_at(RDS) and createdAt/updatedAt(Mongo) in request body
         const { created_at, updated_at, createdAt, updatedAt, ...data } = params.data;
-        options.body = JSON.stringify(data);
+        options.body = JSON.stringify({ data });
         break;
       case CREATE:
         url = `${apiUrl}/${resource}`;
         options.method = 'POST';
-        options.body = JSON.stringify(params.data);
+        options.body = JSON.stringify(params);
         break;
       case DELETE:
         url = `${apiUrl}/${resource}/${params.id}`;
@@ -61,45 +62,71 @@ export default (apiUrl, httpClient = fetchUtils.fetchJson, uploadFields = []) =>
     return { url, options };
   };
 
+  /**
+   * @param {Object} params The request params
+   * @param {Object} params.pagination The pagination params
+   * @param {Number} params.page The page index to request
+   * @param {Number} params.perPage The number of items per page
+   * @param {Object} params.sort The sorting params
+   * @param {String} params.field The sorting field
+   * @param {String} params.order The sorting order
+   * @param {Object} params.filter The filter
+   * @param {String} params.target
+   * @param {Object} params.id
+   * @returns {String} The query string
+   */
   const adjustQueryForStrapi = (params) => {
-    /*
-        params = {
-            pagination: { page: {int} , perPage: {int} },
-            sort: { field: {string}, order: {string} },
-            filter: {Object},
-            target: {string}, (REFERENCE ONLY)
-            id: {mixed} (REFERENCE ONLY)
-        }
-        */
+    let queryStringParams = {};
 
-    // Handle SORTING
-    const s = params.sort;
-    const sort = s.field === '' ? '_sort=updated_at:DESC' : '_sort=' + s.field + ':' + s.order;
-
-    // Handle FILTER
-    const f = params.filter;
-    let filter = '';
-    const keys = Object.keys(f);
-    for (let i = 0; i < keys.length; i++) {
-      //react-admin uses q filter in several components and strapi use _q
-      if (keys[i] === 'q' && f[keys[i]] !== '') {
-        filter += '_q=' + f[keys[i]] + (keys[i + 1] ? '&' : '');
+    if (params.sort) {
+      let sort;
+      if (params.sort.field === '') {
+        sort = 'updated_at:DESC';
       } else {
-        filter += keys[i] + '=' + f[keys[i]] + (keys[i + 1] ? '&' : '');
+        sort = `${params.sort.field}:${params.sort.order}`;
       }
-    }
-    if (params.id && params.target && params.target.indexOf('_id') !== -1) {
-      const target = params.target.substring(0, params.target.length - 3);
-      filter += '&' + target + '=' + params.id;
+      queryStringParams.sort = sort;
     }
 
-    // Handle PAGINATION
-    const { page, perPage } = params.pagination;
-    const start = (page - 1) * perPage;
-    const limit = perPage; //for strapi the _limit params indicate the amount of elements to return in the response
-    const range = '_start=' + start + '&_limit=' + limit;
+    if (params.filter) {
+      let filters = {};
+      for (const filterKey in params.filter) {
+        if (filterKey === 'q') {
+          filters._q = params.filter[filterKey];
+        } else {
+          filters = {
+            ...filters,
+            $or: [
+              {
+                [filterKey]: {
+                  $contains: params.filter[filterKey],
+                },
+              },
+              {
+                [filterKey]: {
+                  $startsWith: params.filter[filterKey],
+                },
+              },
+            ],
+          };
+        }
+      }
+      if (params.id && params.target && params.target.includes('_id')) {
+        const target = params.target.substring(0, params.target.length - 3);
+        filters[target] = params.id;
+      }
+      queryStringParams.filters = filters;
+    }
 
-    return sort + '&' + range + '&' + filter;
+    if (params.pagination) {
+      const { page, perPage } = params.pagination;
+      queryStringParams.pagination = {
+        page: page,
+        pageSize: perPage,
+      };
+    }
+
+    return qs.stringify(queryStringParams, { encode: false });
   };
 
   // Determines if there are new files to upload
@@ -166,6 +193,10 @@ export default (apiUrl, httpClient = fetchUtils.fetchJson, uploadFields = []) =>
     return json;
   };
 
+  function flattenEntry({ id, attributes }) {
+    return { id, ...attributes };
+  }
+
   /**
    * @param {Object} response HTTP response from fetch()
    * @param {String} type One of the constants appearing at the top if this file, e.g. 'UPDATE'
@@ -174,22 +205,25 @@ export default (apiUrl, httpClient = fetchUtils.fetchJson, uploadFields = []) =>
    * @returns {Object} Data response
    */
   const convertHTTPResponse = (response, type, resource, params) => {
-    const { headers, json, total } = response;
+    const { json } = response;
+
     switch (type) {
       case GET_ONE:
-        return { data: replaceRefObjectsWithIds(json) };
+        return { data: replaceRefObjectsWithIds(flattenEntry(json.data)) };
       case GET_LIST:
       case GET_MANY_REFERENCE:
         return {
-          data: json,
-          total,
+          data: json.data.map(flattenEntry),
+          total: json.meta.pagination.total,
         };
       case CREATE:
-        return { data: { ...params.data, id: json.id } };
+        return { data: flattenEntry(json.data) };
+      case UPDATE:
+        return { data: flattenEntry(json.data) };
       case DELETE:
         return { data: { id: null } };
       default:
-        return { data: json };
+        return { data: flattenEntry(json.data) };
     }
   };
 
@@ -248,19 +282,6 @@ export default (apiUrl, httpClient = fetchUtils.fetchJson, uploadFields = []) =>
 
     const { url, options } = convertDataRequestToHTTP(type, resource, params);
 
-    // Get total via model/count endpoint
-    if (type === GET_MANY_REFERENCE || type === GET_LIST) {
-      const { url: urlForCount } = convertDataRequestToHTTP(type, resource + '/count', params);
-      return Promise.all([httpClient(url, options), httpClient(urlForCount, options)]).then((promises) => {
-        const response = {
-          ...promises[0],
-          // Add total for further use
-          total: parseInt(promises[1].json, 10),
-        };
-        return convertHTTPResponse(response, type, resource, params);
-      });
-    } else {
-      return httpClient(url, options).then((response) => convertHTTPResponse(response, type, resource, params));
-    }
+    return httpClient(url, options).then((response) => convertHTTPResponse(response, type, resource, params));
   };
 };
