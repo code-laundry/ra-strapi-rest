@@ -22,5 +22,8 @@
   "bugs": {
     "url": "https://github.com/nazirov91/ra-strapi-rest/issues"
   },
-  "homepage": "https://github.com/nazirov91/ra-strapi-rest#readme"
+  "homepage": "https://github.com/nazirov91/ra-strapi-rest#readme",
+  "devDependencies": {
+    "prettier": "2.5.1"
+  }
 }
