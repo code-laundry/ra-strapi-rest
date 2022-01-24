@@ -25,5 +25,8 @@
   "homepage": "https://github.com/nazirov91/ra-strapi-rest#readme",
   "devDependencies": {
     "prettier": "2.5.1"
+  },
+  "peerDependencies": {
+    "react-admin": "3.19.6"
   }
 }
